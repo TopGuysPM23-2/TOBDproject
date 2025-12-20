@@ -1,0 +1,22 @@
+moex_proxy:
+  base_url: "http://127.0.0.1:8000"
+
+history:
+  engine: "stock"
+  market: "shares"
+  interval: 24          # дневные свечи
+  default_from_days: 365 # если from не передали — тянуть год
+  limit: 500            # максимум на запрос (как в вашем API)
+
+stocks:
+  - id: "SBER"
+    name: "Сбер"
+  - id: "GAZP"
+    name: "Газпром"
+  - id: "LKOH"
+    name: "ЛУКОЙЛ"
+  - id: "YDEX"          # актуальный тикер Яндекса на MOEX (на всякий — см. примечание ниже)
+    name: "Яндекс"
+    aliases: ["YNDX"]   # если у кого-то в коде/данных ещё встречается старый
+  - id: "NVTK"
+    name: "НОВАТЭК"
