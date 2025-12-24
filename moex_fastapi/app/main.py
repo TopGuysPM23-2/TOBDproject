@@ -11,7 +11,7 @@ import asyncio
 import logging
 from app.dependencies import get_moex_client, MoexISSClient
 from concurrent.futures import ThreadPoolExecutor
-
+from confluent_kafka import Producer
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -22,7 +22,6 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """
     Управление жизненным циклом приложения.
-
     - При запуске: инициализируем клиенты
     - При остановке: закрываем соединения
     """
@@ -31,33 +30,33 @@ async def lifespan(app: FastAPI):
     logger.info("🛑 MOEX Proxy API останавливается...")
 
 
+# Настройка Kafka producer
+def create_kafka_producer():
+    # Определим, работает ли мы внутри Docker или нет
+    kafka_broker = 'localhost:9092'  # по умолчанию будем использовать localhost
+
+    try:
+        # Попробуем подключиться к контейнеру Kafka по имени 'kafka'
+        # Для Docker контейнеров: можно использовать kafka:9092
+        producer = Producer({
+            'bootstrap.servers': kafka_broker,  # меняем на localhost, если вне Docker
+            'client.id': 'moex-proxy-api-producer',
+            'acks': 'all',  # Ожидание подтверждения от всех реплик
+        })
+        logger.info(f"Kafka producer created. bootstrap.servers={kafka_broker}, topic=processed_data_topic")
+    except Exception as e:
+        logger.error(f"Error creating Kafka producer: {e}")
+        raise e
+
+    return producer
+
+
 # Создаем приложение с подробным описанием для Swagger
 app = FastAPI(
     title="MOEX ISS Proxy API",
     description=""" 
     ## 📡 Прокси-API к Московской бирже (MOEX ISS)
-
     Этот API является прокси-сервером к официальному API Московской биржи (ISS).
-
-    ### 🔗 Что такое MOEX ISS?
-    Информационно-статистический сервер (ISS) — публичный интерфейс Московской биржи 
-    для получения рыночных данных с задержкой ~15 минут.
-
-    ### ⚠️ Важная информация:
-    1. **Задержка данных**: ~15 минут для рыночных данных
-    2. **Лимиты запросов**: ISS имеет ограничения по частоте запросов
-    3. **Только для ознакомления**: Не для торговых решений
-    4. **Сырые данные**: API возвращает данные в том же формате, что и ISS
-
-    ### 📊 Основные понятия:
-    - **Торговая система (engine)**: `stock` (фондовый рынок), `currency` (валютный), `futures` (срочный)
-    - **Рынок (market)**: `shares` (акции), `bonds` (облигации), `index` (индексы)
-    - **Режим торгов (board)**: `TQBR` (акции Т+), `TQTF` (ETF), `TQTD` (депозитарные расписки)
-
-    ### 🚀 Быстрый старт:
-    1. Получить информацию о бумаге: `GET /securities/SBER`
-    2. Получить котировки: `GET /market/shares/TQBR/SBER`
-    3. Получить исторические свечи: `GET /history/candles/SBER?interval=24&from=2024-01-01`
     """,
     version="1.0.0",
     contact={
@@ -84,10 +83,6 @@ app = FastAPI(
             "name": "history",
             "description": "Исторические данные (свечи, итоги торгов)",
         },
-        {
-            "name": "reference",
-            "description": "Справочники (торговые системы, рынки, режимы торгов)",
-        },
     ],
 )
 
@@ -111,7 +106,6 @@ app.include_router(history.router)
 async def root():
     """
     Корневой эндпоинт API.
-
     Возвращает основную информацию о сервисе и доступные эндпоинты.
     """
     return {
@@ -123,39 +117,6 @@ async def root():
             "redoc": "/redoc",
             "openapi": "/openapi.json"
         },
-        "endpoints": {
-            "securities": {
-                "info": "GET /securities/{ticker} - Информация о бумаге",
-                "search": "GET /securities?q={query} - Поиск бумаг",
-                "indices": "GET /securities/{ticker}/indices - Индексы бумаги",
-            },
-            "market": {
-                "securities": "GET /market/{market}/{board} - Список бумаг рынка",
-                "quotes": "GET /market/{market}/{board}/{ticker} - Котировки",
-                "orderbook": "GET /market/{market}/{board}/{ticker}/orderbook - Стакан",
-                "trades": "GET /market/{market}/{board}/{ticker}/trades - Сделки",
-            },
-            "history": {
-                "candles": "GET /history/candles/{ticker} - Исторические свечи",
-            }
-        },
-        "note": "Все данные предоставляются с задержкой ~15 минут"
-    }
-
-
-# Эндпоинт проверки здоровья
-@app.get("/health", tags=["monitoring"])
-async def health_check():
-    """
-    Проверка работоспособности API.
-
-    Используется для мониторинга и проверки доступности сервиса.
-    """
-    logger.info("Health check request received.")
-    return {
-        "status": "healthy",
-        "service": "moex-proxy-api",
-        "timestamp": "2024-01-15T10:30:00Z"
     }
 
 
@@ -210,7 +171,7 @@ async def get_candles(
         raise HTTPException(status_code=500, detail=f"Произошла ошибка: {str(e)}")
 
 
-# Эндпоинт для запроса исторических данных о свечах
+# Эндпоинт для обработки и анализа данных с отправкой в Kafka
 @app.get("/process_and_analyze")
 async def process_and_analyze_data(
         from_date: str = Query(None, description="Начальная дата (YYYY-MM-DD). По умолчанию: 30 дней назад"),
@@ -276,8 +237,18 @@ async def process_and_analyze_data(
                 processed_data = future.result()
                 all_processed_data.append(processed_data)
 
+        # Отправка данных в Kafka
+        producer = create_kafka_producer()
+        topic = "processed_data_topic"
+        for data in all_processed_data:
+            producer.produce(topic, value=str(data))
+            logger.info(f"Sent processed data to Kafka topic {topic}")
+
+        # Ждем, пока все сообщения не будут отправлены
+        #producer.flush()
+
         # Возвращаем обработанные данные
-        logger.info("Processed data successfully.")
+        logger.info("Processed data successfully and sent to Kafka.")
         return {"processed_data": all_processed_data}
 
     except Exception as e:
@@ -287,9 +258,17 @@ async def process_and_analyze_data(
 
 # Функция для расчета метрик
 def process_metrics(df, ticker):
-    # Расчет метрик
-    df["SMA"] = (df["close"] + df["open"]) / 2  # Простое скользящее среднее
-    df["STD"] = df["high"] - df["low"]  # Стандартное отклонение
+    # Расчет простого скользящего среднего (SMA)
+    df["SMA"] = df[["open", "close"]].mean(axis=1)  # Среднее между ценой открытия и закрытия за день
+
+    # Стандартное отклонение (STD) — разница между максимальной и минимальной ценой
+    df["STD"] = df["high"] - df["low"]
+
+    # Средняя цена за день
+    df["avg_price"] = (df["high"] + df["low"]) / 2
+
+    # Отношение между ценой закрытия и ценой открытия (Close to Open Ratio)
+    df["close_to_open_ratio"] = (df["close"] - df["open"]) / df["open"]
 
     # Преобразуем данные обратно в список Python для возврата
     processed_data = df.to_dict(orient='records')
