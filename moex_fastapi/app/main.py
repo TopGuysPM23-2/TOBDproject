@@ -43,7 +43,7 @@ def create_kafka_producer():
             'client.id': 'moex-proxy-api-producer',
             'acks': 'all',  # Ожидание подтверждения от всех реплик
         })
-        logger.info(f"Kafka producer created. bootstrap.servers={kafka_broker}, topic=processed_data_topic")
+        logger.info(f"Kafka producer created. bootstrap.servers={kafka_broker}, topic=candles")
     except Exception as e:
         logger.error(f"Error creating Kafka producer: {e}")
         raise e
@@ -219,27 +219,45 @@ async def process_and_analyze_data(
 
         # Обработка данных с использованием параллельных вычислений для метрик
         all_processed_data = []
-        with ThreadPoolExecutor() as executor:
-            futures = []
 
-            for ticker, ticker_data in zip(tickers, data):
-                candles = ticker_data['candles']['data']
-                if candles:
-                    # Преобразуем данные в DataFrame Pandas
-                    df = pd.DataFrame(candles,
-                                      columns=["open", "close", "high", "low", "value", "volume", "begin", "end"])
+        for ticker, ticker_data in zip(tickers, data):
+            candles = ticker_data['candles']['data']
+            if candles:
+                # Перебираем данные для каждого дня
+                for candle in candles:
+                    open_price = candle[0]
+                    close_price = candle[1]
+                    high = candle[2]
+                    low = candle[3]
+                    value = candle[4]
+                    volume = candle[5]
+                    begin = candle[6]
+                    end = candle[7]
 
-                    # Параллельная обработка метрик
-                    futures.append(executor.submit(process_metrics, df, ticker))
+                    # Вычисляем дополнительные метрики
+                    sma = (open_price + close_price) / 2  # Пример простого расчета SMA
+                    std = high - low  # Пример стандартного отклонения
+                    avg_price = (high + low) / 2  # Средняя цена
+                    close_to_open_ratio = (close_price - open_price) / open_price  # Отношение цены закрытия к цене открытия
 
-            # Получаем результаты параллельных вычислений
-            for future in futures:
-                processed_data = future.result()
-                all_processed_data.append(processed_data)
+                    # Формируем итоговый объект для каждого дня
+                    processed_candle = {
+                        "ticker": ticker,
+                        "openPrice": open_price,
+                        "closePrice": close_price,
+                        "openDt": begin,
+                        "closeDt": end,
+                        "SMA": sma,
+                        "STD": std,
+                        "avg_price": avg_price,
+                        "close_to_open_ratio": close_to_open_ratio
+                    }
 
-        # Отправка данных в Kafka
+                    all_processed_data.append(processed_candle)
+
+        # Отправка данных в Kafka (оставим часть закомментированной, так как она не изменяется)
         producer = create_kafka_producer()
-        topic = "processed_data_topic"
+        topic = "candles"
         for data in all_processed_data:
             producer.produce(topic, value=str(data))
             logger.info(f"Sent processed data to Kafka topic {topic}")
@@ -254,6 +272,7 @@ async def process_and_analyze_data(
     except Exception as e:
         logger.error(f"Error processing and analyzing data: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 
 # Функция для расчета метрик
