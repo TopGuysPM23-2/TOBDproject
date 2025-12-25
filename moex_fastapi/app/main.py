@@ -51,6 +51,9 @@ def create_kafka_producer():
     return producer
 
 
+producer = create_kafka_producer()
+
+
 # Создаем приложение с подробным описанием для Swagger
 app = FastAPI(
     title="MOEX ISS Proxy API",
@@ -247,16 +250,15 @@ async def process_and_analyze_data(
                         "closePrice": close_price,
                         "openDt": begin,
                         "closeDt": end,
-                        "SMA": sma,
-                        "STD": std,
-                        "avg_price": avg_price,
-                        "close_to_open_ratio": close_to_open_ratio
+                        "sma": sma,
+                        "std": std,
+                        "avgPrice": avg_price,
+                        "closeToOpenRatio": close_to_open_ratio
                     }
 
                     all_processed_data.append(processed_candle)
 
         # Отправка данных в Kafka (оставим часть закомментированной, так как она не изменяется)
-        producer = create_kafka_producer()
         topic = "candles"
         for data in all_processed_data:
             producer.produce(topic, value=str(data))
