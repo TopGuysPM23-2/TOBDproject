@@ -2,7 +2,7 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Query, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
-from app.routers import securities, market, history
+from app.routers import securities, market, history, charts
 import httpx
 import pandas as pd
 import numpy as np
@@ -108,6 +108,7 @@ app.add_middleware(
 app.include_router(securities.router)
 app.include_router(market.router)
 app.include_router(history.router)
+app.include_router(charts.router) 
 
 
 # Корневой эндпоинт

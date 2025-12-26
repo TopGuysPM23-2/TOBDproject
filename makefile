@@ -1,7 +1,7 @@
 include .env
 export $(shell sed 's/=.*//' .env)
 
-CH_DSN=tcp://localhost:9000?username=${CLICKHOUSE_USER}&password=${CLICKHOUSE_PASSWORD}
+CH_DSN=http://localhost:8123?username=${CLICKHOUSE_USER}&password=${CLICKHOUSE_PASSWORD}
 
 KAFKA_CONTAINER_NAME=tobdproject-kafka-1
 
