@@ -32,16 +32,22 @@ async def lifespan(app: FastAPI):
 
 # Настройка Kafka producer
 def create_kafka_producer():
-    # Определим, работает ли мы внутри Docker или нет
-    kafka_broker = 'localhost:9092'  # по умолчанию будем использовать localhost
-
     try:
-        # Попробуем подключиться к контейнеру Kafka по имени 'kafka'
-        # Для Docker контейнеров: можно использовать kafka:9092
+        kafka_broker = 'kafka:9093'
         producer = Producer({
-            'bootstrap.servers': kafka_broker,  # меняем на localhost, если вне Docker
-            'client.id': 'moex-proxy-api-producer',
-            'acks': 'all',  # Ожидание подтверждения от всех реплик
+        'bootstrap.servers': kafka_broker,
+        'client.id': 'moex-proxy-api-producer',
+        'acks': 'all',
+        'retries': 5,
+        'retry.backoff.ms': 1000,
+        'enable.idempotence': True,
+        'max.in.flight.requests.per.connection': 1,
+        'linger.ms': 5,
+        'batch.size': 16384,
+        'socket.timeout.ms': 30000,
+        'message.timeout.ms': 300000,
+        'client.dns.lookup': 'use_all_dns_ips',
+        'security.protocol': 'plaintext',
         })
         logger.info(f"Kafka producer created. bootstrap.servers={kafka_broker}, topic=candles")
     except Exception as e:
@@ -265,7 +271,7 @@ async def process_and_analyze_data(
             logger.info(f"Sent processed data to Kafka topic {topic}")
 
         # Ждем, пока все сообщения не будут отправлены
-        #producer.flush()
+        producer.flush()
 
         # Возвращаем обработанные данные
         logger.info("Processed data successfully and sent to Kafka.")
