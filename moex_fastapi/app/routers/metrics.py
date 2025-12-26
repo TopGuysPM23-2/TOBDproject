@@ -1,31 +1,18 @@
-# app/routers/metrics_router.py
 from fastapi import APIRouter
-from typing import List, Dict
-import pandas as pd
 from app.db import get_clickhouse_client
-from app.metrics import process_metrics
+from typing import List, Dict
 
-router = APIRouter(prefix="/metrics", tags=["metrics"])
+router = APIRouter(prefix="/metrics")
 
-@router.post("/update")
-async def update_metrics(candles: List[Dict]):
-    if not candles:
-        return {"status": "no data"}
-
-    df = pd.DataFrame(candles)
-    ticker = df["ticker"].iloc[0]  # берём первый тикер (можно расширить на несколько)
-    
-    # Вычисляем метрики
-    df = process_metrics(df, ticker)
-    
-    # Подключаемся к ClickHouse
+@router.get("/ticker/{ticker}")
+async def get_metrics(ticker: str, limit: int = 100):
     client = get_clickhouse_client()
-
-    # Вставляем данные в таблицу
-    rows = df.to_dict(orient="records")
-    columns = ", ".join(rows[0].keys())
-    values_template = ", ".join([f"%({col})s" for col in rows[0].keys()])
-    insert_query = f"INSERT INTO td.candles ({columns}) VALUES ({values_template})"
-
-    client.command(insert_query, params=rows)
-    return {"status": "ok", "inserted_rows": len(rows)}
+    query = """
+        SELECT open_price, close_price, sma, std, avg_price, close_to_open_ratio, open_dt, close_dt
+        FROM td.candles FINAL
+        WHERE ticker = %(ticker)s
+        ORDER BY open_dt DESC
+        LIMIT %(limit)s
+    """
+    result = client.query(query, parameters={"ticker": ticker, "limit": limit})
+    return [dict(row) for row in result.result_rows]

@@ -1,30 +1,18 @@
-from fastapi import APIRouter, Query
-from app.clickhouse_utils import fetch_from_clickhouse
+from fastapi import APIRouter
 from typing import List, Dict
+from app.clickhouse_utils import fetch_from_clickhouse
 
-router = APIRouter(prefix="/charts", tags=["charts"])
+router = APIRouter(prefix="/metrics", tags=["metrics"])
 
-@router.get("/candles/{ticker}")
-async def get_candles_chart(
-    ticker: str,
-    interval: int = Query(24, description="Таймфрейм свечей: 1,10,60,24"),
-    limit: int = Query(100, description="Количество свечей")
-) -> List[Dict]:
+@router.get("/ticker/{ticker}")
+async def get_metrics(ticker: str, limit: int = 100) -> List[Dict]:
+    query = """
+        SELECT open_price, close_price, sma, std, avg_price, close_to_open_ratio, open_dt, close_dt
+        FROM td.candles
+        WHERE ticker = %(ticker)s
+        ORDER BY open_dt DESC
+        LIMIT %(limit)s
     """
-    Данные для визуализации свечей.
-    """
-    sql = f"""
-    SELECT
-        ticker,
-        open_price,
-        close_price,
-        open_dt AS time,
-        close_dt,
-        landed_at
-    FROM td.candles
-    WHERE ticker = '{ticker}'
-    ORDER BY open_dt DESC
-    LIMIT {limit}
-    """
-    rows = fetch_from_clickhouse(sql)
+    params = {"ticker": ticker, "limit": limit}
+    rows = fetch_from_clickhouse(query, params=params)
     return rows

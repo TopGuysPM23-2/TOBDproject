@@ -16,6 +16,8 @@ pip install -r requirements.txt
 python run.py
 Сервер доступен: http://127.0.0.1:8000
 
+Или запустите docker-compose up
+
 Документация:
 
 📚 Swagger UI: http://127.0.0.1:8000/docs
