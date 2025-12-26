@@ -1,5 +1,5 @@
 import uvicorn
-from fastapi import FastAPI, HTTPException, Query, Depends
+from fastapi import FastAPI, HTTPException, Query, Depends, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from app.routers import securities, market, history
@@ -180,116 +180,178 @@ async def get_candles(
         raise HTTPException(status_code=500, detail=f"Произошла ошибка: {str(e)}")
 
 
-# Эндпоинт для обработки и анализа данных с отправкой в Kafka
+# # Эндпоинт для обработки и анализа данных с отправкой в Kafka
+# @app.get("/process_and_analyze")
+# async def process_and_analyze_data(
+#         from_date: str = Query(None, description="Начальная дата (YYYY-MM-DD). По умолчанию: 30 дней назад"),
+#         till_date: str = Query(None, description="Конечная дата (YYYY-MM-DD). По умолчанию: сегодня"),
+#         limit: int = Query(100, description="Количество свечей", ge=1, le=500),
+#         interval: int = Query(24, description="Интервал свечей: 1 (1 мин), 10 (10 мин), 60 (1 час), 24 (1 день)"),
+# ):
+#     try:
+#         tickers = ["SBER", "GAZP", "LKOH", "YNDX", "NVTK"]
+#         data = []
+
+#         # Логируем входные параметры
+#         logger.info(f"Processing data with parameters - from_date: {from_date}, till_date: {till_date}, "
+#                     f"limit: {limit}, interval: {interval}")
+
+#         # Если параметры не заданы, используем значения по умолчанию
+#         if not from_date:
+#             from_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+#         if not till_date:
+#             till_date = datetime.now().strftime("%Y-%m-%d")
+
+#         # Логируем обновленные параметры
+#         logger.info(f"Using dates: from_date: {from_date}, till_date: {till_date}")
+
+#         # Вытягиваем данные о свечах для всех тикеров параллельно
+#         async with httpx.AsyncClient() as client:
+#             tasks = []
+#             for ticker in tickers:
+#                 url = f"http://fastapi:8000/candles/{ticker}?interval={interval}&from_date={from_date}&till_date={till_date}&limit={limit}"
+#                 logger.info(f"Request URL for {ticker}: {url}")
+#                 tasks.append(client.get(url))
+
+#             responses = await asyncio.gather(*tasks)
+
+#             # Обрабатываем ответы
+#             for response, ticker in zip(responses, tickers):
+#                 if response.status_code == 200:
+#                     data.append(response.json())
+#                 else:
+#                     logger.error(f"Failed to fetch data for ticker {ticker}, status code: {response.status_code}")
+#                     raise HTTPException(status_code=response.status_code, detail="Failed to fetch data")
+
+#         # Логируем получение данных
+#         logger.info(f"Fetched data for tickers: {tickers}")
+
+#         # Обработка данных с использованием параллельных вычислений для метрик
+#         all_processed_data = []
+
+#         for ticker, ticker_data in zip(tickers, data):
+#             candles = ticker_data['candles']['data']
+#             if candles:
+#                 # Перебираем данные для каждого дня
+#                 for candle in candles:
+#                     open_price = candle[0]
+#                     close_price = candle[1]
+#                     high = candle[2]
+#                     low = candle[3]
+#                     value = candle[4]
+#                     volume = candle[5]
+#                     begin = candle[6]
+#                     end = candle[7]
+
+#                     # Вычисляем дополнительные метрики
+#                     sma = (open_price + close_price) / 2  # Пример простого расчета SMA
+#                     std = high - low  # Пример стандартного отклонения
+#                     avg_price = (high + low) / 2  # Средняя цена
+#                     close_to_open_ratio = (close_price - open_price) / open_price  # Отношение цены закрытия к цене открытия
+
+#                     # Формируем итоговый объект для каждого дня
+#                     processed_candle = {
+#                         "ticker": ticker,
+#                         "openPrice": open_price,
+#                         "closePrice": close_price,
+#                         "openDt": begin,
+#                         "closeDt": end,
+#                         "sma": sma,
+#                         "std": std,
+#                         "avgPrice": avg_price,
+#                         "closeToOpenRatio": close_to_open_ratio
+#                     }
+
+#                     all_processed_data.append(processed_candle)
+
+#         # Отправка данных в Kafka (оставим часть закомментированной, так как она не изменяется)
+#         topic = "candles"
+#         for data in all_processed_data:
+#             producer.produce(topic, value=str(data))
+#             logger.info(f"Sent processed data to Kafka topic {topic}")
+
+#         # Ждем, пока все сообщения не будут отправлены
+#         producer.flush()
+
+#         # Возвращаем обработанные данные
+#         logger.info("Processed data successfully and sent to Kafka.")
+#         return {"processed_data": all_processed_data}
+
+#     except Exception as e:
+#         logger.error(f"Error processing and analyzing data: {str(e)}")
+#         raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/process_and_analyze")
 async def process_and_analyze_data(
+        background_tasks: BackgroundTasks,
         from_date: str = Query(None, description="Начальная дата (YYYY-MM-DD). По умолчанию: 30 дней назад"),
         till_date: str = Query(None, description="Конечная дата (YYYY-MM-DD). По умолчанию: сегодня"),
         limit: int = Query(100, description="Количество свечей", ge=1, le=500),
         interval: int = Query(24, description="Интервал свечей: 1 (1 мин), 10 (10 мин), 60 (1 час), 24 (1 день)"),
 ):
-    try:
-        tickers = ["SBER", "GAZP", "LKOH", "YNDX", "NVTK"]
-        data = []
+    # Подготовка параметров дат
+    if not from_date:
+        from_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+    if not till_date:
+        till_date = datetime.now().strftime("%Y-%m-%d")
 
-        # Логируем входные параметры
-        logger.info(f"Processing data with parameters - from_date: {from_date}, till_date: {till_date}, "
-                    f"limit: {limit}, interval: {interval}")
+    tickers = ["SBER", "GAZP", "LKOH", "YNDX", "NVTK"]
 
-        # Если параметры не заданы, используем значения по умолчанию
-        if not from_date:
-            from_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
-        if not till_date:
-            till_date = datetime.now().strftime("%Y-%m-%d")
+    # Фоновая задача для обработки и отправки данных
+    background_tasks.add_task(process_and_send_to_kafka, tickers, from_date, till_date, limit, interval)
 
-        # Логируем обновленные параметры
-        logger.info(f"Using dates: from_date: {from_date}, till_date: {till_date}")
+    # Отправляем ответ клиенту сразу
+    return {"status": "processing started", "tickers": tickers, "from_date": from_date, "till_date": till_date}
 
-        # Вытягиваем данные о свечах для всех тикеров параллельно
-        async with httpx.AsyncClient() as client:
-            tasks = []
-            for ticker in tickers:
-                url = f"http://127.0.0.1:8000/candles/{ticker}?interval={interval}&from_date={from_date}&till_date={till_date}&limit={limit}"
-                logger.info(f"Request URL for {ticker}: {url}")
-                tasks.append(client.get(url))
 
-            responses = await asyncio.gather(*tasks)
+async def process_and_send_to_kafka(tickers, from_date, till_date, limit, interval):
+    async with httpx.AsyncClient() as client:
+        tasks = []
+        for ticker in tickers:
+            url = f"http://fastapi:8000/candles/{ticker}?interval={interval}&from_date={from_date}&till_date={till_date}&limit={limit}"
+            tasks.append(client.get(url))
 
-            # Обрабатываем ответы
-            for response, ticker in zip(responses, tickers):
-                if response.status_code == 200:
-                    data.append(response.json())
-                else:
-                    logger.error(f"Failed to fetch data for ticker {ticker}, status code: {response.status_code}")
-                    raise HTTPException(status_code=response.status_code, detail="Failed to fetch data")
+        responses = await asyncio.gather(*tasks)
 
-        # Логируем получение данных
-        logger.info(f"Fetched data for tickers: {tickers}")
-
-        # Обработка данных с использованием параллельных вычислений для метрик
         all_processed_data = []
+        for response, ticker in zip(responses, tickers):
+            if response.status_code != 200:
+                logger.error(f"Failed to fetch data for {ticker}, status {response.status_code}")
+                continue
 
-        for ticker, ticker_data in zip(tickers, data):
-            candles = ticker_data['candles']['data']
-            if candles:
-                # Перебираем данные для каждого дня
-                for candle in candles:
-                    open_price = candle[0]
-                    close_price = candle[1]
-                    high = candle[2]
-                    low = candle[3]
-                    value = candle[4]
-                    volume = candle[5]
-                    begin = candle[6]
-                    end = candle[7]
+            candles = response.json()["candles"]["data"]
+            for candle in candles:
+                open_price, close_price, high, low, value, volume, begin, end = candle
+                processed_candle = {
+                    "ticker": ticker,
+                    "openPrice": open_price,
+                    "closePrice": close_price,
+                    "openDt": begin,
+                    "closeDt": end,
+                    "sma": (open_price + close_price) / 2,
+                    "std": high - low,
+                    "avgPrice": (high + low) / 2,
+                    "closeToOpenRatio": (close_price - open_price) / open_price,
+                }
+                all_processed_data.append(processed_candle)
 
-                    # Вычисляем дополнительные метрики
-                    sma = (open_price + close_price) / 2  # Пример простого расчета SMA
-                    std = high - low  # Пример стандартного отклонения
-                    avg_price = (high + low) / 2  # Средняя цена
-                    close_to_open_ratio = (close_price - open_price) / open_price  # Отношение цены закрытия к цене открытия
-
-                    # Формируем итоговый объект для каждого дня
-                    processed_candle = {
-                        "ticker": ticker,
-                        "openPrice": open_price,
-                        "closePrice": close_price,
-                        "openDt": begin,
-                        "closeDt": end,
-                        "sma": sma,
-                        "std": std,
-                        "avgPrice": avg_price,
-                        "closeToOpenRatio": close_to_open_ratio
-                    }
-
-                    all_processed_data.append(processed_candle)
-
-        # Отправка данных в Kafka (оставим часть закомментированной, так как она не изменяется)
+        # Отправка в Kafka
         topic = "candles"
         for data in all_processed_data:
             producer.produce(topic, value=str(data))
-            logger.info(f"Sent processed data to Kafka topic {topic}")
-
-        # Ждем, пока все сообщения не будут отправлены
         producer.flush()
-
-        # Возвращаем обработанные данные
-        logger.info("Processed data successfully and sent to Kafka.")
-        return {"processed_data": all_processed_data}
-
-    except Exception as e:
-        logger.error(f"Error processing and analyzing data: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.info(f"Processed and sent {len(all_processed_data)} candles to Kafka.")
 
 
 
 # Функция для расчета метрик
 def process_metrics(df, ticker):
     # Расчет простого скользящего среднего (SMA)
-    df["SMA"] = df[["open", "close"]].mean(axis=1)  # Среднее между ценой открытия и закрытия за день
+    df["sma"] = df[["open", "close"]].mean(axis=1)  # Среднее между ценой открытия и закрытия за день
 
     # Стандартное отклонение (STD) — разница между максимальной и минимальной ценой
-    df["STD"] = df["high"] - df["low"]
+    df["std"] = df["high"] - df["low"]
 
     # Средняя цена за день
     df["avg_price"] = (df["high"] + df["low"]) / 2
@@ -298,10 +360,8 @@ def process_metrics(df, ticker):
     df["close_to_open_ratio"] = (df["close"] - df["open"]) / df["open"]
 
     # Преобразуем данные обратно в список Python для возврата
-    processed_data = df.to_dict(orient='records')
-
-    # Добавляем ticker к данным для удобства
-    return {ticker: processed_data}
+    df["ticker"] = ticker
+    return df
 
 
 # Для локального запуска
